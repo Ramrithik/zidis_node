@@ -1,0 +1,18 @@
+﻿# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# STM32 temporary compilation artifacts
+*.o
+*.d
+*.su
+*.cyclo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
