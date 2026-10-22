@@ -26,6 +26,15 @@ import time
 import argparse
 import serial
 import serial.tools.list_ports
+import ntfy_notifier
+
+# Windows console encoding safeguard
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 BAUD_RATE = 115200
 
@@ -50,7 +59,14 @@ def main():
     parser = argparse.ArgumentParser(description="ZIDIS Terminal Serial Monitor")
     parser.add_argument("--port", default=None, help="Serial COM port (default: auto-detect)")
     parser.add_argument("--baud", type=int, default=BAUD_RATE, help="Baud rate (default: 115200)")
+    parser.add_argument("--ntfy-topic", default=None, help="ntfy topic to send mobile alerts to (overrides ntfy_config.json)")
+    parser.add_argument("--no-ntfy", action="store_true", help="Disable ntfy mobile notifications")
     args = parser.parse_args()
+
+    # Load ntfy configuration
+    ntfy_cfg = ntfy_notifier.load_config()
+    active_topic = args.ntfy_topic or ntfy_cfg.get("topic", "zidis_earthquake_alert")
+    ntfy_enabled = (not args.no_ntfy) and ntfy_cfg.get("enabled", True)
 
     port = args.port
     if not port:
@@ -63,6 +79,10 @@ def main():
     print("=" * 78)
     print(" ZIDIS NUCLEO-H533RE Terminal Serial Console")
     print(f" Port: {port}  |  Baud: {args.baud}  |  RTOS: uT-Kernel 3.0")
+    if ntfy_enabled:
+        print(f" Mobile Alerts : ENABLED -> https://ntfy.sh/{active_topic}")
+    else:
+        print(" Mobile Alerts : DISABLED")
     print("=" * 78)
     print("Connecting to STM32 board...", flush=True)
 
@@ -114,6 +134,8 @@ def main():
                 sys.stdout.write('\r' + ' ' * 78 + '\r')
                 if "[FAULT]" in line:
                     print(f"\033[91m{line}\033[0m", flush=True)
+                    if ntfy_enabled:
+                        ntfy_notifier.send_from_log_line(line, topic=active_topic)
                 elif "ALERT" in line or "ANOMALY" in line or "Earthquake" in line:
                     print("\n" + "=" * 78, flush=True)
                     print(f" >>> {line}", flush=True)
@@ -130,7 +152,16 @@ def main():
                     except Exception:
                         sys.stdout.write('\a')
                         sys.stdout.flush()
+
+                    # Trigger ntfy mobile push notification
+                    if ntfy_enabled:
+                        dispatched = ntfy_notifier.send_from_log_line(line, topic=active_topic)
+                        if dispatched:
+                            print(f" [NTFY] -> Push alert dispatched to phone: https://ntfy.sh/{active_topic}", flush=True)
                 else:
+                    # Check for alert clear message
+                    if "ALERT: CLEAR" in line and ntfy_enabled:
+                        ntfy_notifier.send_from_log_line(line, topic=active_topic)
                     print(line, flush=True)
 
     except KeyboardInterrupt:

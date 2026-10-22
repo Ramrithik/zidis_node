@@ -1,0 +1,6 @@
+{
+  "topic": "zidis_earthquake_alert",
+  "server": "https://ntfy.sh",
+  "cooldown_seconds": 15,
+  "enabled": true
+}

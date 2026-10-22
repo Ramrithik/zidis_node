@@ -35,6 +35,15 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import matplotlib.gridspec as gridspec
 from matplotlib.widgets import Button
+import ntfy_notifier
+
+# Windows console encoding safeguard
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 # -------------------------------------------------------------
 # 1. Configuration & Constants
@@ -89,6 +98,7 @@ anomaly_active = False
 current_sample_idx = 22600
 is_paused = False
 playback_speed = 1.0
+is_prewarming = False
 
 # Pre-loaded full dataset
 full_wave_data = None
@@ -97,6 +107,10 @@ data_source_label = "2011 Tohoku Mw 9.1 (IU.MAJO @ 100Hz)"
 
 # Audio Buzzer Alarm Control
 buzzer_enabled = True
+
+# ntfy Mobile Push Notification Control
+ntfy_enabled = True
+ntfy_topic = None
 
 def sound_buzzer_alert(alert_type="pwave"):
     """Sounds an audible buzzer alarm through the PC speaker when triggered."""
@@ -213,7 +227,7 @@ def process_sample(sample_val, current_sim_time):
     criteria_count = int(c1) + int(c2) + int(c3) + int(c4)
     detected = (criteria_count >= ANALYSER_MIN_CRITERIA) and (not analyser_cooldown)
 
-    if detected:
+    if detected and not is_prewarming:
         analyser_cooldown = True
         anomaly_active = True
         last_trigger_time = current_sim_time
@@ -229,6 +243,19 @@ def process_sample(sample_val, current_sim_time):
         print(f"           Total Detections : {total_anomalies_detected}", flush=True)
         print("=" * 78 + "\n", flush=True)
 
+        # Dispatch real-time mobile push notification
+        if ntfy_enabled:
+            sent = ntfy_notifier.send_plotter_alert(
+                peak_acc=peak_max,
+                sta_lta_ratio=ratio,
+                criteria_fired=criteria_count,
+                current_time=current_sim_time,
+                lead_time_s=14.4,
+                topic=ntfy_topic
+            )
+            if sent:
+                print(f"[NTFY] -> Push alert dispatched to phone: https://ntfy.sh/{ntfy_topic or 'zidis_earthquake_alert'}\n", flush=True)
+
     return sta, lta, ratio, criteria_count, detected
 
 # -------------------------------------------------------------
@@ -241,8 +268,9 @@ def prewarm_analyser(target_idx):
     Also pre-fills plotting buffers so the GUI displays live history immediately!
     """
     global sta, lta, sta_lta_fired, rms_long, rms_fired, zcr_baseline, zcr_fired
-    global total_anomalies_detected, anomaly_active, analyser_cooldown
+    global total_anomalies_detected, anomaly_active, analyser_cooldown, is_prewarming
 
+    is_prewarming = True
     print(f"[PREWARM] Synchronizing analyser state up to sample #{target_idx} (t0+{full_time_data[target_idx]:.2f}s)...", flush=True)
     for i in range(target_idx):
         s_val = float(full_wave_data[i])
@@ -261,6 +289,7 @@ def prewarm_analyser(target_idx):
     total_anomalies_detected = 0
     anomaly_active = False
     analyser_cooldown = False
+    is_prewarming = False
     print(f"[PREWARM] Synchronized! Ambient LTA={lta:.6f}g, Buffer={len(samples_buf)} samples ready.", flush=True)
 
 # -------------------------------------------------------------
@@ -711,7 +740,18 @@ if __name__ == '__main__':
     parser.add_argument("--speed", type=float, default=1.0, help="Playback speed multiplier (e.g. 1.0, 2.0)")
     parser.add_argument("--port", default=None, help="Serial COM port for NUCLEO board (e.g. COM5)")
     parser.add_argument("--cli", "--no-gui", action="store_true", dest="cli_mode", help="Run in terminal-only console mode without GUI window")
+    parser.add_argument("--ntfy-topic", default=None, help="ntfy topic to send mobile alerts to (overrides config)")
+    parser.add_argument("--no-ntfy", action="store_true", help="Disable ntfy mobile notifications")
     args = parser.parse_args()
+
+    # Configure ntfy Mobile Alerts
+    ntfy_cfg = ntfy_notifier.load_config()
+    ntfy_topic = args.ntfy_topic or ntfy_cfg.get("topic", "zidis_earthquake_alert")
+    ntfy_enabled = (not args.no_ntfy) and ntfy_cfg.get("enabled", True)
+    if ntfy_enabled:
+        print(f"[NTFY] Mobile Alerts : ENABLED -> https://ntfy.sh/{ntfy_topic}", flush=True)
+    else:
+        print("[NTFY] Mobile Alerts : DISABLED", flush=True)
 
     playback_speed = max(args.speed, 0.1)
 
